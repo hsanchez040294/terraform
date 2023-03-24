@@ -1,0 +1,74 @@
+pipeline {
+    agent any
+    tools {
+        "org.jenkinsci.plugins.terraform.TerraformInstallation" "terraform"
+    }
+    parameters {
+
+        string(name: 'WORKSPACE', defaultValue: 'development', description:'workspace to use in Terraform')
+    }
+
+    environment {
+        TF_HOME = tool('terraform')
+        TF_INPUT = "0"
+        TF_IN_AUTOMATION = "TRUE"
+        TF_LOG = "WARN"
+        PATH = "$TF_HOME:$PATH"
+    }
+
+    stages {
+        stage('NetworkInit'){
+            steps {
+                dir('app/networking/'){
+                    sh 'terraform --version'
+                    sh "terraform init"
+                }
+            }
+        }
+        stage('NetworkValidate'){
+            steps {
+                dir('app/networking/'){
+                    sh 'terraform validate'
+                }
+            }
+        }
+        stage('NetworkPlan'){
+            steps {
+                dir('app/networking/'){
+                    script {
+                        try {
+                           sh "terraform workspace new ${params.WORKSPACE}"
+                        } catch (err) {
+                            sh "terraform workspace select ${params.WORKSPACE}"
+                        }
+                        sh "terraform plan -out terraform-networking.tfplan;echo \$? > status"
+                        stash name: "terraform-networking-plan", includes: "terraform-networking.tfplan"
+                    }
+                }
+            }
+        }
+        stage('NetworkApply'){
+            steps {
+                script{
+                    def apply = false
+                    try {
+                        input message: 'confirm apply', ok: 'Apply Config'
+                        apply = true
+                    } catch (err) {
+                        apply = false
+                        dir('app/networking/'){
+                            sh "terraform destroy -auto-approve"
+                        }
+                        currentBuild.result = 'UNSTABLE'
+                    }
+                    if(apply){
+                        dir('app/networking/'){
+                            unstash "terraform-networking-plan"
+                            sh 'terraform apply terraform-networking.tfplan'
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
